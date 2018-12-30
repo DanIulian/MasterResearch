@@ -1,0 +1,48 @@
+verbose: &verbose 1
+runs: 1
+name: "CartPoleVPG"
+title: "Vanilla Policy Gradient"
+plots: "tensorboard" # can be "matplotlib", "tensorboard" or "both"
+save_folder: "experiments"
+
+env:
+  name: "CartPole-v0"
+  verbose: *verbose
+
+agent:
+  name: "policy_gradient"
+  type: "vanilla_policy_gradient"
+  verbose: *verbose
+  cuda: yes
+
+  seed: 543
+
+  # estimator settings
+  estimator: "VanillaPolicyApproximatorCC"
+  value_function: "VanillaFunctionApproximatorCC"
+
+  gamma: 0.99 #discount factor
+  optim: Adam
+  lr: 0.003  # decrease to 0.000135 for hist_len 4
+  eps: 0.01  # RMSprop: 0.01 | Adam: 0.01/batch_size
+  alpha: 0.95
+  n_step: 1  # number of steps in multi-step
+
+  training_steps: &training_steps 3000000
+
+eval:
+  freq: 25000
+  steps: 25000
+  finish_episode: yes
+
+reporting:
+  freq: 25000
+  step_w: 25000
+  ep_w: 100
+
+checkpoints:
+  save_freq: 100
+
+render: no
+max_steps: *training_steps
+episodes: 10000
