@@ -259,15 +259,13 @@ def generate_configs():
         cfg_file = os.path.join(alg_path, "cfg")
         save_config(cfg_file, cfg)
 
-        for run_id in range(cfg.runs):
-            exp_path = os.path.join(alg_path, f"{run_id:d}")
-            if not os.path.isdir(exp_path):
-                os.makedirs(exp_path)
-            common_namespace.save_path = exp_path
+        exp_path = os.path.join(alg_path, f"{0:d}")
+        if not os.path.isdir(exp_path):
+            os.makedirs(exp_path)
+        common_namespace.save_path = exp_path
 
-            add_common(cfg, common_namespace)
-
-            args.append((cfg, run_id, exp_path))
+        add_common(cfg, common_namespace)
+        args.append((cfg, exp_path))
 
     return args
 

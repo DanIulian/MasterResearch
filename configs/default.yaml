@@ -1,48 +1,49 @@
 verbose: &verbose 1
-runs: 1
-name: "CartPoleVPG"
-title: "Vanilla Policy Gradient"
+name: "CuriosityRL"
+title: "Proximal Policy Algorithm"
 plots: "tensorboard" # can be "matplotlib", "tensorboard" or "both"
+
 save_folder: "experiments"
+save_interval: 100
+log_interval: 10
+eval_interval: 25
+
+algo: "ppo"
+
+training:
+  num_env_steps: 40000000
+  num_steps: 128
+  num_processes: 16
+  num_mini_batch: 64
+  ppo_epoch: 4
+  max_grad_norm: 0.5
+  optimizer: Adam
+  optimizer_args:
+    lr: 0.0005
+    eps: 0.00001
+
+general:
+  seed: 543
+  cuda: yes
+  use_linear_lr_decay: True
+  use_linear_clip_decay: True
+  use_clipped_value_loss: True
 
 env:
-  name: "CartPole-v0"
+  name: "BreakoutNoFrameskip-v4"
+  add_timestep: False
+  nr_frames: 4
   verbose: *verbose
 
 agent:
-  name: "policy_gradient"
-  type: "vanilla_policy_gradient"
   verbose: *verbose
-  cuda: yes
-
-  seed: 543
-
-  # estimator settings
-  estimator: "VanillaPolicyApproximatorCC"
-  value_function: "VanillaFunctionApproximatorCC"
-
+  name: "PPOAgent"
+  policy: "a3c_cnn"
   gamma: 0.99 #discount factor
-  optim: Adam
-  lr: 0.003  # decrease to 0.000135 for hist_len 4
-  eps: 0.01  # RMSprop: 0.01 | Adam: 0.01/batch_size
-  alpha: 0.95
-  n_step: 1  # number of steps in multi-step
-
-  training_steps: &training_steps 3000000
-
-eval:
-  freq: 25000
-  steps: 25000
-  finish_episode: yes
-
-reporting:
-  freq: 25000
-  step_w: 25000
-  ep_w: 100
-
-checkpoints:
-  save_freq: 100
-
-render: no
-max_steps: *training_steps
-episodes: 10000
+  lam: 0.95 #gae parameter
+  clip_param: 0.2
+  target_kl: 0.2
+  value_loss_coef: 0.5
+  entropy_coef: 0.01
+  use_initialization: True #use orthogonal initialization
+  input_space: 4

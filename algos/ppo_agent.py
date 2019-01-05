@@ -1,14 +1,9 @@
 import torch
 from torch.optim.lr_scheduler import StepLR
 from logbook import Logger
-import gym
-
-from torch.distributions import Categorical
 from .base_agent import BasePolicyRLAgent
 from models import get_models
-
 import torch.nn as nn
-from utils.agent_utils import  to_cuda
 
 NAMESPACE = 'ppo_agent'  # ++ Identifier name for logging
 log = Logger(NAMESPACE)
@@ -16,177 +11,81 @@ log = Logger(NAMESPACE)
 DATA_SAVE_PREFIX = "agent_data"
 
 
-
 class PPOAgent(BasePolicyRLAgent):
-    def __init__(self, cfg):
-        super(PPOAgent, self).__init__(cfg)
+    def __init__(self, cfg, save_path):
+        super(PPOAgent, self).__init__(cfg, save_path)
 
         # -- Get necessary variables from cfg
         self.cfg = cfg
-        self.gamma = cfg.agent.gamma
-        self.lam = cfg.agent.lam
-        self.target_kl  = cfg.agent.target_kl
-        self.clip_param = cfg.agent.clip_param
-        self.ppo_epoch = cfg.agent.ppo_epoch
-        self.num_mini_batch = cfg.agent.num_mini_batch
+
+        # -- Get agent configs
+        self.gamma = cfg.agent.gamma                        #discount factor
+        self.lam = cfg.agent.lam                            #gae lambda factor
+        self.target_kl = cfg.agent.target_kl               #KL max diff between policies
+        self.clip_param = cfg.agent.clip_param              #clipping parameter of Objective function - epsilon
+        self.ppo_epoch = cfg.training.ppo_epoch
+        self.num_mini_batch = cfg.training.num_mini_batch
         self.value_loss_coef = cfg.agent.value_loss_coef
         self.entropy_coef = cfg.agent.entropy_coef
 
-        self.max_grad_norm = cfg.agent.max_grad_norm
-        self.use_clipped_value_loss = cfg.agent.use_clipped_value_loss
+        self.max_grad_norm = cfg.training.max_grad_norm        #clip the gradients of the model
+        self.use_clipped_value_loss = cfg.general.use_clipped_value_loss  #clipped value loss
 
-        # -- Make the environment
-        self.env = gym.make(cfg.environment)
-        self.obs_dim = self.env.observation_space.shape
-        self.act_dim = self.env.action_space.shape
-
-        # -- Initialize model
-        model_class = get_models(cfg.model)
-
-        self.model = model_class[0](
-            self.env.action_space.n,
-            self.cfg.agent.input_size,
-            cfg.agent.use_initialization)
-
-        self._models.append(
-            self.model)  # -- Add models & optimizers to base for saving
-
-        # ++ After adding model you can set the agent to cuda mode
-        # ++ Parent class already makes some adjustments. E.g. turns model to cuda mode
-        if self._use_cuda:
-            self.cuda()
-
-        # -- Initialize optimizers  - USE MULTIPLE OPTIMIZERS ???
-        self.optimizer = self.get_optim(cfg.train.algorithm,
-                                        cfg.train.algorithm_args, self.model)
-
-        self._optimzers.append(
-            self.optimizer ) # -- Add models & optimizers to base for saving
-
-        #self.scheduler = StepLR(self.optimizer, cfg.train.step_size,
-        #                        cfg.train.decay)
-
-        # ++ E.g. to add variable name to be saved at checkpoints
-        #self._save_data.append("scheduler")
+        self.initial_lr = cfg.training.optimizer_args.lr
 
         super(PPOAgent, self).__end_init__()
 
-    def _session_init(self):
-        if self._is_train:
-            for opt in self._optimizers:
-                opt.zero_grad()
+    def add_model(self, model):
+        self.model = model
+        self._models.append(model)
 
-    def _encode_recent_frames(self, obs_history):
-        pass
+    def add_optimizer(self):
+        self.optimizer = self.get_optim(self.cfg.training.optimizer,
+                                        self.cfg.training.optimizer_args, self.model)
+        self._optimizers.append(self.optimizer)
 
-    def _select_action(self, observation):
-
-        obs_history = self.cfg.agent.obs_history
-        if obs_history > 1:
-            obs = self._encode_recent_frames(obs_history)
-        else:
-            obs = torch.from_numpy(observation).float()
-            obs = to_cuda(obs, self._use_cuda)
-
-        with torch.no_grad():
-            logits, probs_pi, value = self.model(obs)
-
-            m = Categorical(probs_pi)
-            action = m.sample()
-        return action, value, m.log_prob(action), logits, probs_pi
-
-    def _train(self):
-        """
-        Considering a dataloader (loaded from config.)
-        Implement the training loop.
-        :return training loss metric & other information
-        """
-        optimizer = self.optimizer
-        use_cuda = self._use_cuda
-        model = self.model
-        criterion = self._get_criterion
-        env = self.env
-        steps_per_epoch = self.cfg.agent.epoch_steps
-        epochs = self.cfg.agent.nr_epochs
-        max_ep_len = self.cfg.agent.max_ep_len
-
-        obs, rew, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-        for epoch in range(epochs):
-
-            # Main loop: collect experience in env and update/log each epoch
-            for t in range(steps_per_epoch):
-
-                act, val, logp_t, logits, probs_pi = self._select_action(obs)
-
-                # save and log
-                self._store(obs, act, rew, val, logp_t)
-
-                obs, rew, done, _ = env.step(act.item())
-                ep_ret += rew
-                ep_len += 1
-
-                if done:
-                    print(
-                        "Episode ran for {} steps and the agent received total reward {}".format(ep_len, ep_ret))
-
-                terminal = done or (ep_len == max_ep_len)
-                if terminal or (t == steps_per_epoch - 1):
-                    if not (terminal):
-                        print('Warning: trajectory cut off by epoch at %d steps.' % ep_len)
-                    # if trajectory didn't reach terminal state, bootstrap value target
-                    if done:
-                        last_val = rew
-                    else:
-                        _, last_val, _, _, _ = self._select_action(obs)
-
-                    self._finish_path(last_val)
-
-                    obs, rew, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-
-            # Save model
-            if (epoch % self._save_freq == 0) or (epoch == epochs - 1):
-                self.save(prefix=DATA_SAVE_PREFIX + "_{}".format(epoch))
-
-            # Perform PPO update!
-            self._update()
-
-
-    def _update(self, rollouts):
+    def update(self, rollouts):
 
         value_loss_epoch = 0
         action_loss_epoch = 0
         dist_entropy_epoch = 0
         criterion = self._get_criterion
+        kl_exit = False
 
         for e in range(self.ppo_epoch):
-                data_generator = rollouts.feed_forward_generator(self.num_mini_batch)
+            data_generator = rollouts.feed_forward_generator(self.num_mini_batch)
 
             for sample in data_generator:
 
                 obs_batch, actions_batch, value_batch_old, \
-                return_batch, masks_batch, log_probs_old_batch, adv_batch = sample
-
+                return_batch, masks_batch, action_log_probs_old, adv_batch = sample
 
                 # Reshape to do in a single forward pass for all steps
-                values, action_log_probs, dist_entropy, _ = self.model.evaluate_actions(
+                values, action_log_probs, entropy = self.model.evaluate_actions(
                     obs_batch, masks_batch, actions_batch)
 
                 t_loss, a_loss, v_loss, e_loss = \
                     criterion(action_log_probs,
-                              log_probs_old_batch,
+                              action_log_probs_old,
                               adv_batch,
                               values,
                               value_batch_old,
-                              return_batch)
+                              return_batch,
+                              entropy)
 
                 value_loss_epoch += v_loss
                 action_loss_epoch += a_loss
                 dist_entropy_epoch += e_loss
-
                 #compute estimate of KL divergence and stop updating if too big
-                approx_kl = (log_probs_old_batch - action_log_probs).mean()
-                if approx_kl > 1.5 * self.target_kl:
-                    break
+                #approx_kl = (action_log_probs_old - action_log_probs).mean()
+                #if approx_kl > 1.5 * self.target_kl:
+                #    log.info('KL divergence between the old and new plicy exceeded limit, %s STOP UPDATING',
+                #             approx_kl)
+                #    kl_exit = True
+                #    break
+
+            #if kl_exit:
+            #    break
 
         num_updates = self.ppo_epoch * self.num_mini_batch
 
@@ -202,8 +101,8 @@ class PPOAgent(BasePolicyRLAgent):
                        adv_batch,
                        val_batch_old,
                        val_batch_new,
-                       ret_batch):
-
+                       ret_batch,
+                       entropy_loss):
 
         #first term of objective function is the surrogate action objective
         ratio = torch.exp(act_log_probs - act_log_probs_old) # pi(a|s) / pi_old(a|s)
@@ -215,34 +114,39 @@ class PPOAgent(BasePolicyRLAgent):
 
         #second term objective function is the loss value function
         if self.use_clipped_value_loss:
-            value_pred_clipped = torch.clamp(
-                val_batch_new, val_batch_old - self.clip_param,
-                val_batch_old + self.clip_param)
+            value_pred_clipped = val_batch_old + \
+                                 (val_batch_new - val_batch_old).clamp(
+                                     -self.clip_param, self.clip_param)
 
             value_losses = torch.pow((val_batch_new - ret_batch), 2)
             value_losses_clipped = torch.pow((value_pred_clipped - ret_batch), 2)
 
-            value_loss = 0.5 * torch.max(value_losses, value_losses_clipped).mean() # max because you minimze the total
+            value_loss = torch.max(value_losses, value_losses_clipped).mean() # max because you minimze the total
         else:
-            value_loss = 0.5 * torch.pow((val_batch_new - ret_batch), 2).mean()
-
-        #third term is the entropy loss
-        entropy_loss = -act_log_probs.mean()
+            value_loss = torch.pow((val_batch_new - ret_batch), 2).mean()
 
         total_loss = action_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_loss
+
+        self.optimizer.zero_grad()
+
         total_loss.backward()
+
 
         nn.utils.clip_grad_norm_(self.model.parameters(),
                                  self.max_grad_norm)
 
-        for opt in self._optimizers:
-            opt.zero_grad()
-            opt.step()
+        self.optimizer.step()
 
         return total_loss.item(), action_loss.item(), value_loss.item(), entropy_loss.item()
 
+    def update_linear_schedule(self, epoch, total_num_epochs):
+        lr = self.initial_lr - (self.initial_lr * (epoch / float(total_num_epochs)))
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
 
     def _save(self, save_data, path):
+
+        # Save model
         """
         Called when saving agent state. Agent already saves variables defined in the list
         self._save_data and other default options.
@@ -250,25 +154,15 @@ class PPOAgent(BasePolicyRLAgent):
         :param path: Path to folder where other custom data can be saved
         :return: should return default save_data dictionary to be saved
         """
-        save_data['scheduler_state'] = self.scheduler.state_dict()
-        save_data['train_epoch'] = self._train_epoch
-        save_data['loss_value_train'] = self.loss_values_train
-        save_data['loss_value_test'] = self.loss_values_test
+        pass
 
-        return save_data
-
-    def _resume(self, agent_check_point_path, saved_data):
+    def _resume(self, agent_check_point_path, saved_data, device):
         """
         Custom resume scripts should pe implemented here
         :param agent_check_point_path: Path of the checkpoint resumed
         :param saved_data: loaded checkpoint data (dictionary of variables)
         """
-        self.scheduler.load_state_dict(saved_data['scheduler_state'])
-        self.scheduler.optimizer = self.optimizer
         self.model = self._models[0]
         self.optimizer = self._optimizers[0]
         self._train_epoch = saved_data['train_epoch']
-        #self.loss_values_train = saved_data['loss_value_train']
-        #self.loss_values_test = saved_data['loss_value_test']
-        if not self._use_cuda:
-            self.model.cpu()
+        self.to(device)

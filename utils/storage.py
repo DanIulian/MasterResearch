@@ -14,7 +14,7 @@ class RolloutStorage(object):
         self.rew_buf = torch.zeros(num_steps, num_processes, 1)
         self.val_buf = torch.zeros(num_steps + 1, num_processes, 1)
         self.ret_buf = torch.zeros(num_steps + 1, num_processes, 1)
-        self.adv_buf = torch.zeors(num_steps + 1, num_processes, 1)
+        self.adv_buf = torch.zeros(num_steps + 1, num_processes, 1)
         self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
         self.act_buf = torch.zeros(num_steps, num_processes, 1).long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
@@ -31,6 +31,7 @@ class RolloutStorage(object):
         self.action_log_probs = self.action_log_probs.to(device)
         self.act_buf = self.act_buf.to(device)
         self.masks = self.masks.to(device)
+        self.adv_buf = self.adv_buf.to(device)
 
     def insert(self, obs, actions, action_log_probs, value_preds, rewards, masks):
 
@@ -43,26 +44,24 @@ class RolloutStorage(object):
         self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
-        self.obs_buf[0].copy_(self.obs[-1])
+        self.obs_buf[0].copy_(self.obs_buf[-1])
         self.masks[0].copy_(self.masks[-1])
 
     def compute_returns(self, gamma, lam, next_value=0, eps=1e-5):
         self.val_buf[-1] = next_value
         gae = 0
-        ret = 0
         for step in reversed(range(self.rew_buf.size(0))):
             delta = self.rew_buf[step] + \
                     gamma * self.val_buf[step + 1] * self.masks[step + 1] - \
                     self.val_buf[step]
             gae = delta + gamma * lam * self.masks[step + 1] * gae
-            ret = self.ret_buf[step] + lam * self.masks[step + 1] * ret
             self.adv_buf[step] = gae
-            self.ret_buf[step] = ret
+            self.ret_buf[step] = gae + self.val_buf[step]
         self.adv_buf = (self.adv_buf - self.adv_buf.mean()) / (self.adv_buf.std() + eps)
 
     def feed_forward_generator(self, num_mini_batch):
 
-        num_steps, num_processes = self.rewards.size()[0:2]
+        num_steps, num_processes = self.rew_buf.size()[0:2]
         batch_size = num_processes * num_steps
 
         assert batch_size >= num_mini_batch, (
@@ -75,8 +74,8 @@ class RolloutStorage(object):
         sampler = BatchSampler(SubsetRandomSampler(range(batch_size)), mini_batch_size, drop_last=False)
 
         for indices in sampler:
-            obs_batch = self.obs_buf[:-1].view(-1, *self.obs.size()[2:])[indices]
-            actions_batch = self.act_buf.view(-1, self.actions.size(-1))[indices]
+            obs_batch = self.obs_buf[:-1].view(-1, *self.obs_buf.size()[2:])[indices]
+            actions_batch = self.act_buf.view(-1, self.act_buf.size(-1))[indices]
             value_preds_batch = self.val_buf[:-1].view(-1, 1)[indices]
             return_batch = self.ret_buf[:-1].view(-1, 1)[indices]
             adv_batch = self.adv_buf[:-1].view(-1, 1)[indices]

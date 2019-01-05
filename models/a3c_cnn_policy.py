@@ -3,6 +3,8 @@ import torch.nn.functional as F
 from utils.agent_utils import init_cnn
 from utils.agent_utils import init_fc
 from torch.distributions import Categorical
+import cv2
+
 
 def get_models():
     return [A3cCNNPolicy]
@@ -28,7 +30,6 @@ class A3cCNNPolicy(nn.Module):
             ),
             nn.ReLU()
         )
-
         self.conv_block2 = nn.Sequential(
             init_cnn(
                 nn.Conv2d(
@@ -42,8 +43,6 @@ class A3cCNNPolicy(nn.Module):
             ),
             nn.ReLU()
         )
-
-
         self.fc = nn.Sequential(
             init_cnn(
                 nn.Linear(
@@ -54,7 +53,6 @@ class A3cCNNPolicy(nn.Module):
             ),
             nn.ReLU()
         )
-
         self.policy_head = init_fc(
             nn.Linear(in_features=256, out_features=nr_actions),
             self.o_init)
@@ -63,8 +61,7 @@ class A3cCNNPolicy(nn.Module):
             self.o_init)
 
     def forward(self, x):
-
-        x = self.conv_block1(x)
+        x = self.conv_block1(x / 255.0)
         x = self.conv_block2(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
@@ -85,22 +82,23 @@ class A3cCNNPolicy(nn.Module):
     def evaluate_actions(self, inputs, masks, actions):
 
         logits, prob_pi, values = self.forward(inputs)
-        import pdb; pdb.set_trace()
+        dist_log_prob = F.log_softmax(logits, dim=1)
+        dist_prob = F.softmax(logits, dim=1)
+        action_log_probs = dist_log_prob.gather(1, actions.view(-1, 1))
 
-        #dist = self.dist(actor_features)
-
-        #action_log_probs = dist.log_probs(action)
-        #dist_entropy = dist.entropy().mean()
-
-        #return value, action_log_probs, dist_entropy, rnn_hxs
-
+        entropy = -(action_log_probs * dist_prob.gather(1, actions.view(-1, 1))).mean()
+        return values, action_log_probs, entropy
 
     def act(self, inputs, masks, deterministic=False):
-        logits, probs_pi, values = self.model(inputs)
+        logits, probs_pi, values = self.forward(inputs)
 
         m = Categorical(probs_pi)
         actions = m.sample()
         return values, actions, m.log_prob(actions)
+
+    def get_best_action(self, inputs):
+        logits, probs_pi, values = self.forward(inputs)
+        return probs_pi.argmax()
 
     def get_value(self, inputs):
         _, _, values = self.forward(inputs)

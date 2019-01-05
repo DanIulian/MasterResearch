@@ -58,21 +58,20 @@ class MLPPolicy(nn.Module):
     def evaluate_actions(self, inputs, masks, actions):
 
         logits, prob_pi, values = self.forward(inputs)
-        import pdb; pdb.set_trace()
-
-        #dist = self.dist(actor_features)
-
-        #action_log_probs = dist.log_probs(action)
-        #dist_entropy = dist.entropy().mean()
-
-        #return value, action_log_probs, dist_entropy, rnn_hxs
+        dist_log_prob = F.log_softmax(logits, dim=1)
+        action_log_probs = dist_log_prob.gather(1, actions.view(-1, 1))
+        return values, action_log_probs
 
     def act(self, inputs, masks, deterministic=False):
-        logits, probs_pi, values = self.model(inputs)
+        logits, probs_pi, values = self.forward(inputs)
 
         m = Categorical(probs_pi)
         actions = m.sample()
         return values, actions, m.log_prob(actions)
+
+    def get_best_action(self, inputs):
+        logits, probs_pi, values = self.forward(inputs)
+        return probs_pi.argmax()
 
     def get_value(self, inputs):
         _, _, values = self.forward(inputs)

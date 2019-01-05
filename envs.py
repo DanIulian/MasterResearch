@@ -1,5 +1,3 @@
-import os
-
 import gym
 import numpy as np
 import torch
@@ -12,7 +10,16 @@ from vec_env.dummy_vec_env import DummyVecEnv
 from vec_env.vec_normalize import VecNormalize as VecNormalize_
 
 
-def make_env(env_id, seed, rank):
+def get_vec_normalize(venv):
+    if isinstance(venv, VecNormalize):
+        return venv
+    elif hasattr(venv, 'venv'):
+        return get_vec_normalize(venv.venv)
+
+    return None
+
+
+def make_env(env_id, seed, rank, add_timestep):
     def _thunk():
 
         env = gym.make(env_id)
@@ -23,6 +30,12 @@ def make_env(env_id, seed, rank):
             env = make_atari(env_id)
 
         env.seed(seed + rank)
+
+        obs_shape = env.observation_space.shape
+
+        if add_timestep and len(
+                obs_shape) == 1 and str(env).find('TimeLimit') > -1:
+            env = AddTimestep(env)
 
         if is_atari:
             if len(env.observation_space.shape) == 3:
@@ -38,9 +51,10 @@ def make_env(env_id, seed, rank):
     return _thunk
 
 
-def make_vec_envs(env_name, seed, num_processes, gamma, log_dir, add_timestep,
-                  device, allow_early_resets, num_frame_stack=None):
-    envs = [make_env(env_name, seed, i, log_dir, add_timestep, allow_early_resets)
+def make_vec_envs(env_name, seed, num_processes, gamma, add_timestep,
+                  device, num_frame_stack=None):
+
+    envs = [make_env(env_name, seed, i, add_timestep)
             for i in range(num_processes)]
 
     if len(envs) > 1:
@@ -54,7 +68,8 @@ def make_vec_envs(env_name, seed, num_processes, gamma, log_dir, add_timestep,
         else:
             envs = VecNormalize(envs, gamma=gamma)
 
-    envs = VecPyTorch(envs, device)
+    #envs = VecNormalize(envs, ob=False)
+    envs = VecPyTorch(envs, device) # Transform to PyTorch tensors
 
     if num_frame_stack is not None:
         envs = VecPyTorchFrameStack(envs, num_frame_stack, device)
@@ -112,7 +127,7 @@ class VecPyTorch(VecEnvWrapper):
         return obs
 
     def step_async(self, actions):
-        actions = actions.squeeze(1).cpu().numpy()
+        actions = actions.cpu().numpy()
         self.venv.step_async(actions)
 
     def step_wait(self):
@@ -150,7 +165,6 @@ class VecPyTorchFrameStack(VecEnvWrapper):
     def __init__(self, venv, nstack, device=None):
         self.venv = venv
         self.nstack = nstack
-
         wos = venv.observation_space  # wrapped ob space
         self.shape_dim0 = wos.shape[0]
 

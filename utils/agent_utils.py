@@ -1,6 +1,18 @@
 import numpy as np
-import scipy.signal
 import torch.nn as nn
+import matplotlib.pyplot as plt
+
+
+def save_reward_plot(num_steps, rewards, env_name, save_path):
+
+    #plot loss and total accuracy
+    plt.figure(1)
+    plt.plot(num_steps, rewards)
+    plt.xlabel('Nr Stesp')
+    plt.ylabel('Mean episodic reward')
+    plt.title("Reward on " + env_name)
+    plt.savefig(save_path + "/Training reward on " + env_name)
+
 
 def to_cuda(data, use_cuda):
     input_ = data.float()
@@ -9,26 +21,11 @@ def to_cuda(data, use_cuda):
     return input_
 
 
-def combined_shape(length, shape=None):
-    if shape is None:
-        return (length,)
-    return (length, shape) if np.isscalar(shape) else (length, *shape)
-
-
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-    input:
-        vector x,
-        [x0,
-         x1,
-         x2]
-    output:
-        [x0 + discount * x1 + discount^2 * x2,
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+def update_linear_schedule(optimizer, epoch, total_num_epochs, initial_lr):
+    """Decreases the learning rate linearly"""
+    lr = initial_lr - (initial_lr * (epoch / float(total_num_epochs)))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
 
 
 def init(module, weight_init, bias_init, gain=1):

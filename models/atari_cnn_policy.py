@@ -47,7 +47,7 @@ class AtariCNNPolicy(nn.Module):
             init_cnn(
                 nn.Conv2d(
                     in_channels=64,
-                    out_channels=64,
+                    out_channels=32,
                     kernel_size=3,
                     stride=1,
                     bias=True
@@ -60,7 +60,7 @@ class AtariCNNPolicy(nn.Module):
         self.fc = nn.Sequential(
             init_cnn(
                 nn.Linear(
-                    in_features=3136,
+                    in_features=32 * 7 * 7,
                     out_features=512
                 ),
                 self.o_init
@@ -75,8 +75,7 @@ class AtariCNNPolicy(nn.Module):
             self.o_init)
 
     def forward(self, x):
-
-        x = self.conv_block1(x)
+        x = self.conv_block1(x / 255.0)
         x = self.conv_block2(x)
         x = self.conv_block3(x)
         x = x.view(x.size(0), -1)
@@ -98,22 +97,20 @@ class AtariCNNPolicy(nn.Module):
     def evaluate_actions(self, inputs, masks, actions):
 
         logits, prob_pi, values = self.forward(inputs)
-        import pdb; pdb.set_trace()
-
-        #dist = self.dist(actor_features)
-
-        #action_log_probs = dist.log_probs(action)
-        #dist_entropy = dist.entropy().mean()
-
-        #return value, action_log_probs, dist_entropy, rnn_hxs
-
+        dist_log_prob = F.log_softmax(logits, dim=1)
+        action_log_probs = dist_log_prob.gather(1, actions.view(-1, 1))
+        return values, action_log_probs
 
     def act(self, inputs, masks, deterministic=False):
-        logits, probs_pi, values = self.model(inputs)
+        logits, probs_pi, values = self.forward(inputs)
 
         m = Categorical(probs_pi)
         actions = m.sample()
         return values, actions, m.log_prob(actions)
+
+    def get_best_action(self, inputs):
+        logits, probs_pi, values = self.forward(inputs)
+        return probs_pi.argmax()
 
     def get_value(self, inputs):
         _, _, values = self.forward(inputs)
